@@ -1,5 +1,7 @@
 from fastapi import FastAPI
 
+from app.api.database import router as database_router
+
 
 app = FastAPI(
     title="Placement Intelligence & Career Readiness Platform",
@@ -9,6 +11,9 @@ app = FastAPI(
     ),
     version="1.0.0",
 )
+
+
+app.include_router(database_router)
 
 
 @app.get("/", tags=["System"])
