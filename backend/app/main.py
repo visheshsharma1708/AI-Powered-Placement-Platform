@@ -4,7 +4,7 @@ from app.api.auth import router as auth_router
 from app.api import resumes
 from app.api.profiles import router as profiles_router
 from app.api.database import router as database_router
-
+from app.api.readiness import router as readiness_router
 
 app = FastAPI(
     title="Placement Intelligence & Career Readiness Platform",
@@ -21,6 +21,7 @@ app.include_router(auth_router)
 app.include_router(resumes.router)
 app.include_router(users_router)
 app.include_router(profiles_router)
+app.include_router(readiness_router)
 @app.get("/", tags=["System"])
 def root():
     return {

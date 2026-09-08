@@ -13,7 +13,11 @@ ALLOWED_EXTENSIONS = {".pdf", ".docx"}
 
 MAX_FILE_SIZE = 5 * 1024 * 1024
 
-RESUME_STORAGE_DIR = Path("backend/storage/resumes")
+BACKEND_DIR = Path(__file__).resolve().parents[2]
+
+RESUME_STORAGE_DIR = (
+    BACKEND_DIR / "storage" / "resumes"
+)
 
 
 def validate_resume_file(file: UploadFile) -> str:
@@ -44,7 +48,11 @@ def get_next_version(
         .order_by(Resume.version.desc())
     )
 
-    latest_version = db.execute(statement).scalars().first()
+    latest_version = (
+        db.execute(statement)
+        .scalars()
+        .first()
+    )
 
     if latest_version is None:
         return 1
@@ -57,6 +65,7 @@ async def save_resume(
     user: User,
     file: UploadFile,
 ) -> Resume:
+
     extension = validate_resume_file(file)
 
     file_content = await file.read()
@@ -84,11 +93,13 @@ async def save_resume(
     )
 
     unique_name = (
-        f"user_{user.id}_resume_{version}_{uuid4().hex}"
-        f"{extension}"
+        f"user_{user.id}_resume_{version}_"
+        f"{uuid4().hex}{extension}"
     )
 
-    file_path = RESUME_STORAGE_DIR / unique_name
+    file_path = (
+        RESUME_STORAGE_DIR / unique_name
+    )
 
     file_path.write_bytes(file_content)
 
@@ -96,7 +107,7 @@ async def save_resume(
         user_id=user.id,
         file_name=file.filename,
         stored_file_name=unique_name,
-        file_path=str(file_path),
+        file_path=str(file_path.resolve()),
         file_type=extension.replace(".", ""),
         file_size=len(file_content),
         version=version,
@@ -114,6 +125,7 @@ def get_user_resumes(
     db: Session,
     user_id: int,
 ) -> list[Resume]:
+
     statement = (
         select(Resume)
         .where(Resume.user_id == user_id)
@@ -121,7 +133,9 @@ def get_user_resumes(
     )
 
     return list(
-        db.execute(statement).scalars().all()
+        db.execute(statement)
+        .scalars()
+        .all()
     )
 
 
@@ -130,6 +144,7 @@ def get_resume(
     user_id: int,
     resume_id: int,
 ) -> Resume:
+
     statement = (
         select(Resume)
         .where(
@@ -138,7 +153,11 @@ def get_resume(
         )
     )
 
-    resume = db.execute(statement).scalars().first()
+    resume = (
+        db.execute(statement)
+        .scalars()
+        .first()
+    )
 
     if resume is None:
         raise HTTPException(
@@ -154,6 +173,7 @@ def delete_resume(
     user_id: int,
     resume_id: int,
 ) -> None:
+
     resume = get_resume(
         db=db,
         user_id=user_id,
