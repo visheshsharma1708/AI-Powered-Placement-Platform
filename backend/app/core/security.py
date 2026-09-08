@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from jose import JWTError, jwt # type: ignore
+from jose import jwt
 from pwdlib import PasswordHash
 
 from app.core.config import settings
@@ -17,17 +17,18 @@ def verify_password(password: str, hashed_password: str) -> bool:
     return password_hash.verify(password, hashed_password)
 
 
-def create_access_token(data: dict) -> str:
-    to_encode = data.copy()
-
+def create_access_token(user_id: int) -> str:
     expire = datetime.now(timezone.utc) + timedelta(
         minutes=settings.access_token_expire_minutes
     )
 
-    to_encode.update({"exp": expire})
+    payload = {
+        "sub": str(user_id),
+        "exp": expire,
+    }
 
     return jwt.encode(
-        to_encode,
+        payload,
         settings.secret_key,
         algorithm=settings.algorithm,
     )
