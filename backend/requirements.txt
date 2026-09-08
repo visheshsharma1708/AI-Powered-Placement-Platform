@@ -12,3 +12,5 @@ email-validator
 httpx
 streamlit
 alembic
+pypdf
+python-docx
