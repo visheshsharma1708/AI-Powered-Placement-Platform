@@ -5,6 +5,7 @@ from app.api import resumes
 from app.api.profiles import router as profiles_router
 from app.api.database import router as database_router
 from app.api.readiness import router as readiness_router
+from app.api.job_descriptions import router as job_descriptions_router
 
 app = FastAPI(
     title="Placement Intelligence & Career Readiness Platform",
@@ -22,6 +23,8 @@ app.include_router(resumes.router)
 app.include_router(users_router)
 app.include_router(profiles_router)
 app.include_router(readiness_router)
+app.include_router(job_descriptions_router)
+
 @app.get("/", tags=["System"])
 def root():
     return {

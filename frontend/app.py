@@ -1,17 +1,12 @@
 import requests
 import streamlit as st
 
-from api_client import (
-    get_current_user,
-    login_user,
-    register_user,
-)
 
-from pages.profile import show_profile_page
+# ============================================================
+# CONFIGURATION
+# ============================================================
 
-
-BACKEND_URL = "http://127.0.0.1:8000"
-
+API_URL = "http://127.0.0.1:8000"
 
 st.set_page_config(
     page_title="Placement Intelligence Platform",
@@ -25,22 +20,139 @@ st.set_page_config(
 # ============================================================
 
 def initialize_session():
-    if "access_token" not in st.session_state:
-        st.session_state.access_token = None
+    defaults = {
+        "access_token": None,
+        "user": None,
+        "profile": None,
+        "latest_analysis": None,
+        "latest_readiness": None,
+        "latest_resume_id": None,
+    }
 
-    if "user" not in st.session_state:
-        st.session_state.user = None
-
-    if "page" not in st.session_state:
-        st.session_state.page = "Dashboard"
+    for key, value in defaults.items():
+        if key not in st.session_state:
+            st.session_state[key] = value
 
 
 def logout():
-    st.session_state.access_token = None
-    st.session_state.user = None
-    st.session_state.page = "Dashboard"
+    st.session_state.clear()
+    st.rerun()
+
+
+# ============================================================
+# COMMON HELPERS
+# ============================================================
+
+def get_headers(token: str) -> dict:
+    return {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+    }
+
+
+def get_error_message(
+    response,
+    default_message: str,
+) -> str:
+    try:
+        data = response.json()
+        detail = data.get("detail")
+
+        if isinstance(detail, list):
+            messages = []
+
+            for item in detail:
+                if isinstance(item, dict):
+                    messages.append(
+                        str(item.get("msg", item))
+                    )
+                else:
+                    messages.append(str(item))
+
+            return "; ".join(messages)
+
+        if detail:
+            return str(detail)
+
+    except (ValueError, AttributeError):
+        pass
+
+    return response.text or default_message
+
+
+def handle_unauthorized():
+    st.session_state["access_token"] = None
+    st.session_state["user"] = None
+    st.session_state["profile"] = None
+    st.session_state["latest_analysis"] = None
+    st.session_state["latest_readiness"] = None
+
+    st.warning(
+        "Your session has expired. Please login again."
+    )
 
     st.rerun()
+
+
+def show_connection_error(error):
+    if isinstance(error, requests.ConnectionError):
+        st.error(
+            "Cannot connect to FastAPI. "
+            "Please make sure Uvicorn is running on "
+            "http://127.0.0.1:8000."
+        )
+
+    elif isinstance(error, requests.Timeout):
+        st.error(
+            "The request timed out. Please try again."
+        )
+
+    else:
+        st.error(
+            f"Backend request failed: {error}"
+        )
+
+
+# ============================================================
+# AUTHENTICATION API
+# ============================================================
+
+def login_user(
+    email: str,
+    password: str,
+):
+    return requests.post(
+        f"{API_URL}/auth/login",
+        json={
+            "email": email.strip(),
+            "password": password,
+        },
+        timeout=30,
+    )
+
+
+def register_user(
+    full_name: str,
+    email: str,
+    password: str,
+):
+    return requests.post(
+        f"{API_URL}/auth/register",
+        json={
+            "full_name": full_name.strip(),
+            "email": email.strip(),
+            "password": password,
+        },
+        timeout=30,
+    )
+
+
+def get_current_user(token: str):
+    return requests.get(
+        f"{API_URL}/auth/me",
+        headers=get_headers(token),
+        timeout=30,
+    )
 
 
 # ============================================================
@@ -48,11 +160,13 @@ def logout():
 # ============================================================
 
 def login_page():
+
     st.title(
-        "🎓 Placement Intelligence & Career Readiness Platform"
+        "🎓 Placement Intelligence "
+        "& Career Readiness Platform"
     )
 
-    st.subheader("Login")
+    st.subheader("Student Login")
 
     with st.form("login_form"):
 
@@ -72,60 +186,80 @@ def login_page():
             use_container_width=True,
         )
 
-    if submitted:
+    if not submitted:
+        return
 
-        if not email or not password:
-            st.warning(
-                "Please enter both email and password."
-            )
-            return
+    if not email.strip():
+        st.warning("Please enter your email.")
+        return
 
-        try:
+    if not password:
+        st.warning("Please enter your password.")
+        return
 
-            response = login_user(
-                email=email,
-                password=password,
-            )
+    try:
 
-            if response.status_code == 200:
+        response = login_user(
+            email=email,
+            password=password,
+        )
 
-                data = response.json()
-
-                st.session_state.access_token = data[
-                    "access_token"
-                ]
-
-                user_response = get_current_user(
-                    st.session_state.access_token
-                )
-
-                if user_response.status_code == 200:
-
-                    st.session_state.user = (
-                        user_response.json()
-                    )
-
-                st.success("Login successful.")
-
-                st.rerun()
-
-            elif response.status_code in (400, 401):
-
-                st.error(
-                    "Invalid email or password."
-                )
-
-            else:
-
-                st.error(
-                    f"Login failed: {response.text}"
-                )
-
-        except Exception as error:
+        if response.status_code != 200:
 
             st.error(
-                f"Unable to connect to backend: {error}"
+                get_error_message(
+                    response,
+                    "Invalid email or password.",
+                )
             )
+
+            return
+
+        data = response.json()
+
+        token = data.get(
+            "access_token"
+        )
+
+        if not token:
+
+            st.error(
+                "Login succeeded, but no access token "
+                "was returned."
+            )
+
+            return
+
+        st.session_state["access_token"] = token
+
+        user_response = get_current_user(
+            token
+        )
+
+        if user_response.status_code == 200:
+
+            st.session_state["user"] = (
+                user_response.json()
+            )
+
+        elif user_response.status_code == 401:
+
+            handle_unauthorized()
+            return
+
+        else:
+
+            st.session_state["user"] = None
+
+        st.success(
+            "Login successful."
+        )
+
+        st.rerun()
+
+    except requests.RequestException as error:
+
+        show_connection_error(error)
 
 
 # ============================================================
@@ -135,12 +269,12 @@ def login_page():
 def register_page():
 
     st.title(
-        "🎓 Placement Intelligence Platform"
+        "🎓 Create Student Account"
     )
 
-    st.subheader("Create Student Account")
-
-    with st.form("register_form"):
+    with st.form(
+        "register_form"
+    ):
 
         full_name = st.text_input(
             "Full Name",
@@ -169,64 +303,63 @@ def register_page():
             use_container_width=True,
         )
 
-    if submitted:
+    if not submitted:
+        return
 
-        if not full_name or not email or not password:
+    if not full_name.strip():
+        st.warning(
+            "Full name is required."
+        )
+        return
 
-            st.warning(
-                "Please fill all required fields."
+    if not email.strip():
+        st.warning(
+            "Email is required."
+        )
+        return
+
+    if not password:
+        st.warning(
+            "Password is required."
+        )
+        return
+
+    if password != confirm_password:
+        st.error(
+            "Passwords do not match."
+        )
+        return
+
+    try:
+
+        response = register_user(
+            full_name=full_name,
+            email=email,
+            password=password,
+        )
+
+        if response.status_code in (
+            200,
+            201,
+        ):
+
+            st.success(
+                "Account created successfully. "
+                "Please login."
             )
 
-            return
-
-        if password != confirm_password:
+        else:
 
             st.error(
-                "Passwords do not match."
+                get_error_message(
+                    response,
+                    "Registration failed.",
+                )
             )
 
-            return
+    except requests.RequestException as error:
 
-        try:
-
-            response = register_user(
-                email=email,
-                full_name=full_name,
-                password=password,
-            )
-
-            if response.status_code in (200, 201):
-
-                st.success(
-                    "Account created successfully. "
-                    "You can now login."
-                )
-
-            elif response.status_code == 409:
-
-                st.warning(
-                    "An account with this email "
-                    "already exists."
-                )
-
-            elif response.status_code == 422:
-
-                st.error(
-                    "Please enter valid registration "
-                    "information."
-                )
-
-            else:
-
-                st.error(
-                    f"Registration failed: {response.text}"
-                )
-
-        except Exception as error:
-
-            st.error(
-                f"Unable to connect to backend: {error}"
-            )
+        show_connection_error(error)
 
 
 # ============================================================
@@ -235,199 +368,1183 @@ def register_page():
 
 def dashboard_page():
 
+    user = st.session_state.get(
+        "user"
+    ) or {}
+
+    full_name = user.get(
+        "full_name",
+        "Student",
+    )
+
     st.title(
         "📊 Placement Intelligence Dashboard"
     )
 
-    user = st.session_state.get("user")
-
-    if user:
-
-        full_name = user.get(
-            "full_name",
-            "Student",
-        )
-
-        st.subheader(
-            f"Welcome, {full_name} 👋"
-        )
+    st.subheader(
+        f"Welcome, {full_name} 👋"
+    )
 
     st.write(
         """
-        Welcome to your Placement Intelligence dashboard.
-
-        The platform analyzes your resume, profile,
-        skills, projects, experience and career goals
-        to estimate your career readiness.
+        Your centralized placement intelligence dashboard.
+        Analyze your resume, evaluate your placement readiness,
+        and prepare for job opportunities.
         """
     )
 
     st.divider()
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
 
     with col1:
 
         st.metric(
-            "Resume Readiness",
-            "Coming soon",
+            "Student Profile",
+            "Active",
         )
 
     with col2:
 
         st.metric(
-            "Placement Readiness",
-            "Coming soon",
+            "Resume Intelligence",
+            "Active",
         )
 
     with col3:
 
         st.metric(
-            "Job Match",
-            "Coming soon",
+            "ML Readiness",
+            "Active",
         )
 
-    st.info(
-        "Use the navigation menu to manage your profile "
-        "and analyze your resume."
+    with col4:
+
+        st.metric(
+            "Job Analysis",
+            "Active",
+        )
+
+    st.divider()
+
+    st.subheader(
+        "🚀 Platform Workflow"
+    )
+
+    st.write(
+        """
+        **Step 1:** Complete your student profile.
+
+        **Step 2:** Upload your latest resume.
+
+        **Step 3:** Analyze your resume.
+
+        **Step 4:** Generate placement-readiness prediction.
+
+        **Step 5:** Add job descriptions.
+
+        **Step 6:** Use the job-matching module to identify
+        skill gaps and career opportunities.
+        """
+    )
+
+    readiness = st.session_state.get(
+        "latest_readiness"
+    )
+
+    if readiness:
+
+        try:
+
+            score = float(
+                readiness.get(
+                    "readiness_score",
+                    0,
+                )
+            )
+
+            st.divider()
+
+            st.subheader(
+                "Latest Readiness Score"
+            )
+
+            st.metric(
+                "Placement Readiness",
+                f"{score:.2f}%",
+            )
+
+            st.progress(
+                min(
+                    max(
+                        score / 100,
+                        0.0,
+                    ),
+                    1.0,
+                )
+            )
+
+        except (
+            TypeError,
+            ValueError,
+        ):
+
+            pass
+
+
+# ============================================================
+# PROFILE
+# ============================================================
+
+def profile_page(token: str):
+
+    st.title(
+        "👤 Student Profile"
+    )
+
+    try:
+
+        response = requests.get(
+            f"{API_URL}/profiles/me",
+            headers=get_headers(token),
+            timeout=30,
+        )
+
+        if response.status_code == 401:
+
+            handle_unauthorized()
+            return
+
+        if response.status_code != 200:
+
+            st.error(
+                get_error_message(
+                    response,
+                    "Unable to load profile.",
+                )
+            )
+
+            return
+
+        profile = response.json()
+
+        st.session_state["profile"] = profile
+
+        st.subheader(
+            "Profile Information"
+        )
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+
+            st.write(
+                f"**University:** "
+                f"{profile.get('university') or 'Not provided'}"
+            )
+
+            st.write(
+                f"**Degree:** "
+                f"{profile.get('degree') or 'Not provided'}"
+            )
+
+            st.write(
+                f"**Branch:** "
+                f"{profile.get('branch') or 'Not provided'}"
+            )
+
+            st.write(
+                f"**Graduation Year:** "
+                f"{profile.get('graduation_year') or 'Not provided'}"
+            )
+
+        with col2:
+
+            st.write(
+                f"**Target Role:** "
+                f"{profile.get('target_role') or 'Not provided'}"
+            )
+
+            st.write(
+                f"**GitHub:** "
+                f"{profile.get('github_url') or 'Not provided'}"
+            )
+
+            st.write(
+                f"**LinkedIn:** "
+                f"{profile.get('linkedin_url') or 'Not provided'}"
+            )
+
+            st.write(
+                f"**Portfolio:** "
+                f"{profile.get('portfolio_url') or 'Not provided'}"
+            )
+
+        if profile.get("bio"):
+
+            st.divider()
+
+            st.subheader(
+                "About"
+            )
+
+            st.write(
+                profile["bio"]
+            )
+
+        st.divider()
+
+        st.subheader(
+            "Update Profile"
+        )
+
+        with st.form(
+            "profile_update_form"
+        ):
+
+            university = st.text_input(
+                "University",
+                value=profile.get(
+                    "university"
+                ) or "",
+            )
+
+            degree = st.text_input(
+                "Degree",
+                value=profile.get(
+                    "degree"
+                ) or "",
+            )
+
+            branch = st.text_input(
+                "Branch",
+                value=profile.get(
+                    "branch"
+                ) or "",
+            )
+
+            current_year = profile.get(
+                "graduation_year"
+            )
+
+            try:
+                current_year = int(
+                    current_year
+                )
+            except (
+                TypeError,
+                ValueError,
+            ):
+                current_year = 2026
+
+            graduation_year = st.number_input(
+                "Graduation Year",
+                min_value=2000,
+                max_value=2100,
+                value=current_year,
+                step=1,
+            )
+
+            target_role = st.text_input(
+                "Target Role",
+                value=profile.get(
+                    "target_role"
+                ) or "",
+            )
+
+            github_url = st.text_input(
+                "GitHub URL",
+                value=profile.get(
+                    "github_url"
+                ) or "",
+            )
+
+            linkedin_url = st.text_input(
+                "LinkedIn URL",
+                value=profile.get(
+                    "linkedin_url"
+                ) or "",
+            )
+
+            portfolio_url = st.text_input(
+                "Portfolio URL",
+                value=profile.get(
+                    "portfolio_url"
+                ) or "",
+            )
+
+            bio = st.text_area(
+                "Bio",
+                value=profile.get(
+                    "bio"
+                ) or "",
+            )
+
+            submitted = st.form_submit_button(
+                "Save Profile",
+                use_container_width=True,
+            )
+
+        if submitted:
+
+            payload = {
+                "university": (
+                    university.strip()
+                    or None
+                ),
+                "degree": (
+                    degree.strip()
+                    or None
+                ),
+                "branch": (
+                    branch.strip()
+                    or None
+                ),
+                "graduation_year": int(
+                    graduation_year
+                ),
+                "target_role": (
+                    target_role.strip()
+                    or None
+                ),
+                "github_url": (
+                    github_url.strip()
+                    or None
+                ),
+                "linkedin_url": (
+                    linkedin_url.strip()
+                    or None
+                ),
+                "portfolio_url": (
+                    portfolio_url.strip()
+                    or None
+                ),
+                "bio": (
+                    bio.strip()
+                    or None
+                ),
+            }
+
+            try:
+
+                update_response = requests.put(
+                    f"{API_URL}/profiles/me",
+                    json=payload,
+                    headers=get_headers(token),
+                    timeout=30,
+                )
+
+                if update_response.status_code == 401:
+
+                    handle_unauthorized()
+                    return
+
+                if update_response.status_code in (
+                    200,
+                    201,
+                ):
+
+                    st.success(
+                        "Profile updated successfully."
+                    )
+
+                    st.rerun()
+
+                else:
+
+                    st.error(
+                        get_error_message(
+                            update_response,
+                            "Unable to update profile.",
+                        )
+                    )
+
+            except requests.RequestException as error:
+
+                show_connection_error(error)
+
+    except requests.RequestException as error:
+
+        show_connection_error(error)
+
+
+# ============================================================
+# RESUME API
+# ============================================================
+
+def get_resumes(token: str):
+
+    return requests.get(
+        f"{API_URL}/resumes/",
+        headers=get_headers(token),
+        timeout=30,
     )
 
 
-# ============================================================
-# READINESS API
-# ============================================================
+def upload_resume_file(
+    token: str,
+    uploaded_file,
+):
 
-def get_readiness_prediction(
-    api_url: str,
+    files = {
+        "file": (
+            uploaded_file.name,
+            uploaded_file.getvalue(),
+            uploaded_file.type
+            or "application/octet-stream",
+        )
+    }
+
+    return requests.post(
+        f"{API_URL}/resumes/upload",
+        files=files,
+        headers=get_headers(token),
+        timeout=60,
+    )
+
+
+def analyze_resume_api(
     token: str,
     resume_id: int,
 ):
 
+    return requests.post(
+        f"{API_URL}/resumes/{resume_id}/analyze",
+        headers=get_headers(token),
+        timeout=120,
+    )
+
+
+def download_resume_api(
+    token: str,
+    resume_id: int,
+):
+
+    return requests.get(
+        f"{API_URL}/resumes/{resume_id}/download",
+        headers=get_headers(token),
+        timeout=60,
+    )
+
+
+def predict_readiness_api(
+    token: str,
+    resume_id: int,
+):
+
+    return requests.post(
+        f"{API_URL}/readiness/{resume_id}/predict",
+        headers=get_headers(token),
+        timeout=120,
+    )
+
+
+# ============================================================
+# RESUME ANALYSIS DISPLAY
+# ============================================================
+
+def display_analysis_section(
+    title: str,
+    data,
+):
+
+    if not data:
+        return
+
+    st.subheader(title)
+
+    if isinstance(data, list):
+
+        for item in data:
+
+            if isinstance(item, dict):
+                st.json(item)
+
+            else:
+                st.write(
+                    f"• {item}"
+                )
+
+    else:
+
+        st.write(data)
+
+
+def display_resume_analysis(
+    analysis: dict,
+):
+
+    st.divider()
+
+    st.subheader(
+        "📊 Resume Analysis"
+    )
+
+    skills = analysis.get(
+        "skills",
+        [],
+    )
+
+    technologies = analysis.get(
+        "technologies",
+        [],
+    )
+
+    projects = analysis.get(
+        "projects",
+        [],
+    )
+
+    experience = analysis.get(
+        "experience",
+        [],
+    )
+
+    education = analysis.get(
+        "education",
+        [],
+    )
+
+    certifications = analysis.get(
+        "certifications",
+        [],
+    )
+
+    achievements = analysis.get(
+        "achievements",
+        [],
+    )
+
+    raw_text = analysis.get(
+        "raw_text",
+        "",
+    )
+
+    columns = st.columns(4)
+
+    summary = [
+        ("Skills", skills),
+        ("Technologies", technologies),
+        ("Projects", projects),
+        ("Experience", experience),
+    ]
+
+    for column, (
+        label,
+        value,
+    ) in zip(
+        columns,
+        summary,
+    ):
+
+        with column:
+
+            count = (
+                len(value)
+                if isinstance(value, list)
+                else 0
+            )
+
+            st.metric(
+                label,
+                count,
+            )
+
+    display_analysis_section(
+        "🛠️ Skills",
+        skills,
+    )
+
+    display_analysis_section(
+        "💻 Technologies",
+        technologies,
+    )
+
+    display_analysis_section(
+        "🎓 Education",
+        education,
+    )
+
+    display_analysis_section(
+        "🚀 Projects",
+        projects,
+    )
+
+    display_analysis_section(
+        "💼 Experience",
+        experience,
+    )
+
+    display_analysis_section(
+        "📜 Certifications",
+        certifications,
+    )
+
+    display_analysis_section(
+        "🏆 Achievements",
+        achievements,
+    )
+
+    if raw_text:
+
+        with st.expander(
+            "View Extracted Resume Text"
+        ):
+
+            st.text(raw_text)
+
+
+# ============================================================
+# RESUME PAGE
+# ============================================================
+
+def resumes_page(token: str):
+
+    st.title(
+        "📄 Resume Management"
+    )
+
+    st.subheader(
+        "Upload Resume"
+    )
+
+    uploaded_file = st.file_uploader(
+        "Choose a PDF or DOCX resume",
+        type=[
+            "pdf",
+            "docx",
+        ],
+        key="resume_uploader",
+    )
+
+    if uploaded_file is not None:
+
+        st.info(
+            f"Selected file: "
+            f"{uploaded_file.name} "
+            f"({uploaded_file.size:,} bytes)"
+        )
+
+        if st.button(
+            "⬆️ Upload Resume",
+            use_container_width=True,
+        ):
+
+            try:
+
+                response = upload_resume_file(
+                    token,
+                    uploaded_file,
+                )
+
+                if response.status_code == 401:
+
+                    handle_unauthorized()
+                    return
+
+                if response.status_code == 201:
+
+                    data = response.json()
+
+                    resume_id = data.get(
+                        "id"
+                    )
+
+                    st.session_state[
+                        "latest_resume_id"
+                    ] = resume_id
+
+                    st.success(
+                        "Resume uploaded successfully."
+                    )
+
+                    st.rerun()
+
+                else:
+
+                    st.error(
+                        get_error_message(
+                            response,
+                            "Resume upload failed.",
+                        )
+                    )
+
+            except requests.RequestException as error:
+
+                show_connection_error(error)
+
+    st.divider()
+
+    st.subheader(
+        "Your Resumes"
+    )
+
     try:
 
-        response = requests.post(
-            f"{api_url}/readiness/{resume_id}/predict",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/json",
-            },
-            timeout=30,
+        response = get_resumes(
+            token
         )
 
-    except requests.exceptions.ConnectionError:
+        if response.status_code == 401:
 
-        st.error(
-            "Unable to connect to the FastAPI backend. "
-            "Make sure Uvicorn is running."
+            handle_unauthorized()
+            return
+
+        if response.status_code != 200:
+
+            st.error(
+                get_error_message(
+                    response,
+                    "Unable to load resumes.",
+                )
+            )
+
+            return
+
+        resumes = response.json()
+
+        if not resumes:
+
+            st.info(
+                "No resumes uploaded yet."
+            )
+
+            return
+
+        for resume in resumes:
+
+            resume_id = resume.get(
+                "id"
+            )
+
+            if resume_id is None:
+                continue
+
+            with st.container():
+
+                col1, col2, col3 = st.columns(
+                    [4, 2, 2]
+                )
+
+                with col1:
+
+                    st.markdown(
+                        f"### 📄 "
+                        f"{resume.get('file_name', 'Resume')}"
+                    )
+
+                    st.caption(
+                        f"Resume ID: {resume_id} | "
+                        f"Version: "
+                        f"{resume.get('version', '-')}"
+                    )
+
+                with col2:
+
+                    st.write(
+                        f"**Type:** "
+                        f"{resume.get('file_type', '-')}"
+                    )
+
+                    size = resume.get(
+                        "file_size",
+                        0,
+                    )
+
+                    st.write(
+                        f"**Size:** "
+                        f"{size:,} bytes"
+                    )
+
+                with col3:
+
+                    if st.button(
+                        "🔍 Analyze",
+                        key=f"analyze_{resume_id}",
+                        use_container_width=True,
+                    ):
+
+                        run_resume_analysis(
+                            token,
+                            int(resume_id),
+                        )
+
+                    if st.button(
+                        "⬇️ Download",
+                        key=f"download_{resume_id}",
+                        use_container_width=True,
+                    ):
+
+                        run_resume_download(
+                            token,
+                            int(resume_id),
+                            resume.get(
+                                "file_name",
+                                "resume",
+                            ),
+                        )
+
+                st.divider()
+
+        analysis = st.session_state.get(
+            "latest_analysis"
         )
 
-        return None
+        if analysis:
 
-    except requests.exceptions.Timeout:
+            display_resume_analysis(
+                analysis
+            )
 
-        st.error(
-            "The readiness prediction request timed out."
-        )
+    except requests.RequestException as error:
 
-        return None
+        show_connection_error(error)
 
-    except requests.exceptions.RequestException as error:
 
-        st.error(
-            f"Request failed: {error}"
-        )
+def run_resume_analysis(
+    token: str,
+    resume_id: int,
+):
 
-        return None
-
-    if response.status_code == 200:
-
-        return response.json()
-
-    if response.status_code == 401:
-
-        st.error(
-            "Your session has expired. "
-            "Please login again."
-        )
-
-        return None
-
-    if response.status_code == 404:
-
-        st.error(
-            "The selected resume was not found."
-        )
-
-        return None
-
-    if response.status_code == 422:
+    with st.spinner(
+        "Analyzing resume..."
+    ):
 
         try:
 
-            detail = response.json().get(
-                "detail",
-                "Unable to generate prediction.",
+            response = analyze_resume_api(
+                token,
+                resume_id,
             )
 
-        except Exception:
+            if response.status_code == 401:
 
-            detail = response.text
+                handle_unauthorized()
+                return
 
-        st.error(
-            f"Prediction error: {detail}"
+            if response.status_code != 200:
+
+                st.error(
+                    get_error_message(
+                        response,
+                        "Resume analysis failed.",
+                    )
+                )
+
+                return
+
+            analysis = response.json()
+
+            st.session_state[
+                "latest_analysis"
+            ] = analysis
+
+            st.session_state[
+                "latest_resume_id"
+            ] = resume_id
+
+            st.success(
+                "Resume analysis completed successfully."
+            )
+
+            st.rerun()
+
+        except requests.RequestException as error:
+
+            show_connection_error(error)
+
+
+def run_resume_download(
+    token: str,
+    resume_id: int,
+    file_name: str,
+):
+
+    try:
+
+        response = download_resume_api(
+            token,
+            resume_id,
         )
 
-        return None
+        if response.status_code == 401:
 
-    st.error(
-        f"Unable to generate readiness prediction. "
-        f"HTTP {response.status_code}"
+            handle_unauthorized()
+            return
+
+        if response.status_code != 200:
+
+            st.error(
+                get_error_message(
+                    response,
+                    "Resume download failed.",
+                )
+            )
+
+            return
+
+        st.download_button(
+            "⬇️ Download Resume",
+            data=response.content,
+            file_name=file_name,
+            mime="application/octet-stream",
+            key=f"download_result_{resume_id}",
+        )
+
+    except requests.RequestException as error:
+
+        show_connection_error(error)
+
+
+# ============================================================
+# READINESS PAGE
+# ============================================================
+
+def readiness_page(token: str):
+
+    st.title(
+        "🎯 Placement Readiness Analysis"
     )
 
-    return None
+    st.write(
+        """
+        Generate an ML-based placement-readiness estimate
+        using your resume and available profile information.
+        """
+    )
 
+    try:
 
-# ============================================================
-# DISPLAY READINESS RESULT
-# ============================================================
+        response = get_resumes(
+            token
+        )
+
+        if response.status_code == 401:
+
+            handle_unauthorized()
+            return
+
+        if response.status_code != 200:
+
+            st.error(
+                get_error_message(
+                    response,
+                    "Unable to load resumes.",
+                )
+            )
+
+            return
+
+        resumes = response.json()
+
+        if not resumes:
+
+            st.info(
+                "Please upload a resume first."
+            )
+
+            return
+
+        resume_options = {}
+
+        for resume in resumes:
+
+            resume_id = resume.get(
+                "id"
+            )
+
+            if resume_id is None:
+                continue
+
+            file_name = resume.get(
+                "file_name",
+                "Resume",
+            )
+
+            version = resume.get(
+                "version",
+                "?",
+            )
+
+            label = (
+                f"{file_name} "
+                f"(Version {version}, "
+                f"ID {resume_id})"
+            )
+
+            resume_options[label] = int(
+                resume_id
+            )
+
+        if not resume_options:
+
+            st.info(
+                "No valid resumes were found."
+            )
+
+            return
+
+        labels = list(
+            resume_options.keys()
+        )
+
+        default_index = 0
+
+        latest_resume_id = (
+            st.session_state.get(
+                "latest_resume_id"
+            )
+        )
+
+        if latest_resume_id is not None:
+
+            for index, label in enumerate(
+                labels
+            ):
+
+                if (
+                    resume_options[label]
+                    == latest_resume_id
+                ):
+
+                    default_index = index
+                    break
+
+        selected_label = st.selectbox(
+            "Select Resume",
+            labels,
+            index=default_index,
+        )
+
+        selected_resume_id = (
+            resume_options[
+                selected_label
+            ]
+        )
+
+        st.info(
+            f"Selected Resume ID: "
+            f"{selected_resume_id}"
+        )
+
+        if st.button(
+            "🚀 Generate Readiness Prediction",
+            use_container_width=True,
+        ):
+
+            with st.spinner(
+                "Generating ML prediction..."
+            ):
+
+                try:
+
+                    prediction_response = (
+                        predict_readiness_api(
+                            token,
+                            selected_resume_id,
+                        )
+                    )
+
+                    if (
+                        prediction_response.status_code
+                        == 401
+                    ):
+
+                        handle_unauthorized()
+                        return
+
+                    if (
+                        prediction_response.status_code
+                        != 200
+                    ):
+
+                        st.error(
+                            get_error_message(
+                                prediction_response,
+                                "Unable to generate readiness prediction.",
+                            )
+                        )
+
+                        return
+
+                    result = (
+                        prediction_response.json()
+                    )
+
+                    st.session_state[
+                        "latest_readiness"
+                    ] = result
+
+                    st.session_state[
+                        "latest_resume_id"
+                    ] = selected_resume_id
+
+                    st.success(
+                        "Readiness prediction generated successfully."
+                    )
+
+                except requests.RequestException as error:
+
+                    show_connection_error(error)
+
+        result = st.session_state.get(
+            "latest_readiness"
+        )
+
+        if result:
+
+            display_readiness_result(
+                result
+            )
+
+    except requests.RequestException as error:
+
+        show_connection_error(error)
+
 
 def display_readiness_result(
     result: dict,
 ):
 
+    st.divider()
+
     st.subheader(
         "📈 Placement Readiness Result"
     )
 
-    score = float(
-        result.get(
-            "readiness_score",
-            0,
+    try:
+
+        score = float(
+            result.get(
+                "readiness_score",
+                0,
+            )
         )
-    )
 
-    probability = float(
-        result.get(
-            "readiness_probability",
-            0,
+        probability = float(
+            result.get(
+                "readiness_probability",
+                0,
+            )
         )
-    )
 
-    prediction = int(
-        result.get(
-            "prediction",
-            0,
+        prediction = int(
+            result.get(
+                "prediction",
+                0,
+            )
         )
-    )
 
-    model_version = result.get(
-        "model_version",
-        "Unknown",
-    )
+    except (
+        TypeError,
+        ValueError,
+    ):
 
-    # --------------------------------------------------------
-    # Main metrics
-    # --------------------------------------------------------
+        st.error(
+            "Invalid readiness result returned by backend."
+        )
+
+        return
 
     col1, col2, col3 = st.columns(3)
 
@@ -447,32 +1564,23 @@ def display_readiness_result(
 
     with col3:
 
-        if prediction == 1:
-            prediction_text = "Ready"
-        else:
-            prediction_text = "Needs Improvement"
-
         st.metric(
             "Prediction",
-            prediction_text,
+            (
+                "Placement Ready"
+                if prediction == 1
+                else "Needs Improvement"
+            ),
         )
 
-    st.caption(
-        f"Model version: {model_version}"
-    )
-
     st.progress(
-        min(max(score / 100, 0.0), 1.0)
-    )
-
-    # --------------------------------------------------------
-    # Features
-    # --------------------------------------------------------
-
-    st.divider()
-
-    st.subheader(
-        "🔎 Features Used by the Model"
+        min(
+            max(
+                score / 100,
+                0.0,
+            ),
+            1.0,
+        )
     )
 
     features = result.get(
@@ -480,315 +1588,390 @@ def display_readiness_result(
         {},
     )
 
-    if features:
+    if isinstance(
+        features,
+        dict,
+    ) and features:
 
-        feature_columns = st.columns(3)
+        st.divider()
 
-        for index, (name, value) in enumerate(
+        st.subheader(
+            "Model Features"
+        )
+
+        columns = st.columns(3)
+
+        for index, (
+            name,
+            value,
+        ) in enumerate(
             features.items()
         ):
 
-            with feature_columns[index % 3]:
+            with columns[
+                index % 3
+            ]:
 
-                readable_name = (
+                label = (
                     name.replace(
                         "_",
                         " ",
                     ).title()
                 )
 
-                if isinstance(value, float):
+                if isinstance(
+                    value,
+                    float,
+                ):
 
-                    display_value = round(
+                    value = round(
                         value,
                         2,
                     )
 
-                else:
-
-                    display_value = value
-
                 st.metric(
-                    readable_name,
-                    display_value,
+                    label,
+                    value,
                 )
-
-    else:
-
-        st.info(
-            "No feature information was returned."
-        )
-
-    # --------------------------------------------------------
-    # Explanation
-    # --------------------------------------------------------
 
     explanation = result.get(
         "explanation",
         {},
     )
 
-    positive_factors = explanation.get(
-        "positive_factors",
-        [],
-    )
+    if isinstance(
+        explanation,
+        dict,
+    ):
 
-    improvement_areas = explanation.get(
-        "improvement_areas",
-        [],
-    )
-
-    st.divider()
-
-    col1, col2 = st.columns(2)
-
-    with col1:
-
-        st.subheader(
-            "✅ Positive Factors"
+        positive = explanation.get(
+            "positive_factors",
+            [],
         )
 
-        if positive_factors:
-
-            for factor in positive_factors:
-
-                st.success(
-                    str(factor)
-                )
-
-        else:
-
-            st.info(
-                "No positive factors were generated."
-            )
-
-    with col2:
-
-        st.subheader(
-            "⚠️ Improvement Areas"
+        improvement = explanation.get(
+            "improvement_areas",
+            [],
         )
 
-        if improvement_areas:
+        if positive or improvement:
 
-            for area in improvement_areas:
+            st.divider()
 
-                st.warning(
-                    str(area)
+            col1, col2 = st.columns(2)
+
+            with col1:
+
+                st.subheader(
+                    "✅ Positive Factors"
                 )
 
-        else:
+                if positive:
 
-            st.info(
-                "No improvement areas were generated."
-            )
+                    for item in positive:
 
-    # --------------------------------------------------------
-    # Disclaimer
-    # --------------------------------------------------------
+                        display_factor(
+                            item,
+                            positive=True,
+                        )
 
-    st.divider()
+                else:
+
+                    st.info(
+                        "No positive factors returned."
+                    )
+
+            with col2:
+
+                st.subheader(
+                    "⚠️ Improvement Areas"
+                )
+
+                if improvement:
+
+                    for item in improvement:
+
+                        display_factor(
+                            item,
+                            positive=False,
+                        )
+
+                else:
+
+                    st.info(
+                        "No improvement areas returned."
+                    )
 
     st.caption(
-        """
-        Important: This is a machine-learning-based
-        career readiness estimate. It is not a guarantee
-        of placement. The result depends on the data,
-        features and model used by the system.
-        """
+        "This score is an estimate based on available "
+        "resume and profile information. It is not a "
+        "guarantee of placement."
     )
 
 
+def display_factor(
+    item,
+    positive: bool,
+):
+
+    if isinstance(
+        item,
+        dict,
+    ):
+
+        label = item.get(
+            "label",
+            item.get(
+                "feature",
+                "Factor",
+            ),
+        )
+
+        contribution = item.get(
+            "contribution"
+        )
+
+        value = item.get(
+            "value"
+        )
+
+        text = f"**{label}**"
+
+        if value is not None:
+
+            text += (
+                f" — value: {value}"
+            )
+
+        if contribution is not None:
+
+            text += (
+                f" — contribution: "
+                f"{contribution}"
+            )
+
+    else:
+
+        text = str(item)
+
+    if positive:
+
+        st.success(text)
+
+    else:
+
+        st.warning(text)
+
+
 # ============================================================
-# READINESS PAGE
+# JOB DESCRIPTION
 # ============================================================
 
-def readiness_page():
+def job_description_page(
+    token: str,
+):
 
     st.title(
-        "🤖 Placement Readiness Analysis"
+        "💼 Job Descriptions"
     )
 
     st.write(
         """
-        Select one of your uploaded resumes and generate
-        an ML-based career readiness estimate.
+        Add job descriptions that will be used for
+        job matching and skill-gap analysis.
         """
     )
 
-    token = st.session_state.get(
-        "access_token"
-    )
+    with st.form(
+        "job_description_form"
+    ):
 
-    if not token:
-
-        st.error(
-            "You are not authenticated."
+        title = st.text_input(
+            "Job Title",
+            placeholder="Machine Learning Engineer",
         )
 
-        return
+        company_name = st.text_input(
+            "Company Name",
+            placeholder="Example Technologies",
+        )
 
-    # --------------------------------------------------------
-    # Fetch user's resumes
-    # --------------------------------------------------------
+        description = st.text_area(
+            "Job Description",
+            height=250,
+            placeholder=(
+                "Paste the complete job description here..."
+            ),
+        )
+
+        submitted = st.form_submit_button(
+            "Save Job Description",
+            use_container_width=True,
+        )
+
+    if submitted:
+
+        if not title.strip():
+
+            st.error(
+                "Job title is required."
+            )
+
+            return
+
+        if len(
+            description.strip()
+        ) < 20:
+
+            st.error(
+                "Job description must contain "
+                "at least 20 characters."
+            )
+
+            return
+
+        payload = {
+            "title": title.strip(),
+            "company_name": (
+                company_name.strip()
+                or None
+            ),
+            "description": description.strip(),
+            "source": "manual",
+        }
+
+        try:
+
+            response = requests.post(
+                f"{API_URL}/job-descriptions/",
+                json=payload,
+                headers=get_headers(token),
+                timeout=30,
+            )
+
+            if response.status_code == 401:
+
+                handle_unauthorized()
+                return
+
+            if response.status_code in (
+                200,
+                201,
+            ):
+
+                st.success(
+                    "Job description saved successfully."
+                )
+
+                st.rerun()
+
+            else:
+
+                st.error(
+                    get_error_message(
+                        response,
+                        "Unable to save job description.",
+                    )
+                )
+
+        except requests.RequestException as error:
+
+            show_connection_error(error)
+
+    st.divider()
+
+    st.subheader(
+        "Saved Job Descriptions"
+    )
 
     try:
 
         response = requests.get(
-            f"{BACKEND_URL}/resumes/",
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Accept": "application/json",
-            },
-            timeout=15,
+            f"{API_URL}/job-descriptions/",
+            headers=get_headers(token),
+            timeout=30,
         )
 
-    except requests.exceptions.RequestException as error:
+        if response.status_code == 401:
 
-        st.error(
-            f"Unable to load resumes: {error}"
-        )
+            handle_unauthorized()
+            return
 
-        return
+        if response.status_code != 200:
 
-    if response.status_code == 401:
-
-        st.error(
-            "Your session has expired. Please login again."
-        )
-
-        return
-
-    if response.status_code != 200:
-
-        st.error(
-            f"Unable to load resumes. "
-            f"HTTP {response.status_code}"
-        )
-
-        return
-
-    try:
-
-        resumes = response.json()
-
-    except ValueError:
-
-        st.error(
-            "The backend returned an invalid response."
-        )
-
-        return
-
-    if not resumes:
-
-        st.info(
-            "No resumes found. "
-            "Please upload a resume first."
-        )
-
-        return
-
-    # --------------------------------------------------------
-    # Resume selector
-    # --------------------------------------------------------
-
-    resume_options = {}
-
-    for resume in resumes:
-
-        resume_id = resume.get("id")
-
-        file_name = resume.get(
-            "file_name",
-            "Unknown resume",
-        )
-
-        version = resume.get(
-            "version",
-            "?",
-        )
-
-        label = (
-            f"{file_name} "
-            f"(Version {version}, ID {resume_id})"
-        )
-
-        resume_options[label] = resume_id
-
-    selected_resume = st.selectbox(
-        "Select Resume",
-        options=list(
-            resume_options.keys()
-        ),
-    )
-
-    selected_resume_id = resume_options[
-        selected_resume
-    ]
-
-    st.info(
-        f"Selected Resume ID: {selected_resume_id}"
-    )
-
-    # --------------------------------------------------------
-    # Prediction button
-    # --------------------------------------------------------
-
-    if st.button(
-        "🚀 Analyze Placement Readiness",
-        use_container_width=True,
-    ):
-
-        with st.spinner(
-            "Generating readiness prediction..."
-        ):
-
-            result = get_readiness_prediction(
-                api_url=BACKEND_URL,
-                token=token,
-                resume_id=int(
-                    selected_resume_id
-                ),
+            st.error(
+                get_error_message(
+                    response,
+                    "Unable to load job descriptions.",
+                )
             )
 
-        if result:
+            return
 
-            st.session_state[
-                "latest_readiness_result"
-            ] = result
+        jobs = response.json()
 
-            st.success(
-                "Readiness analysis completed successfully."
+        if not jobs:
+
+            st.info(
+                "No job descriptions saved yet."
             )
 
-    # --------------------------------------------------------
-    # Display previous/current result
-    # --------------------------------------------------------
+            return
 
-    result = st.session_state.get(
-        "latest_readiness_result"
-    )
+        for job in jobs:
 
-    if result:
+            with st.container():
 
-        display_readiness_result(
-            result
-        )
+                st.markdown(
+                    f"### 💼 "
+                    f"{job.get('title', 'Job Description')}"
+                )
+
+                if job.get(
+                    "company_name"
+                ):
+
+                    st.write(
+                        f"**Company:** "
+                        f"{job['company_name']}"
+                    )
+
+                st.write(
+                    job.get(
+                        "description",
+                        "",
+                    )
+                )
+
+                st.caption(
+                    f"Source: "
+                    f"{job.get('source', 'manual')}"
+                )
+
+                st.divider()
+
+    except requests.RequestException as error:
+
+        show_connection_error(error)
 
 
 # ============================================================
 # MAIN APPLICATION
 # ============================================================
 
-def main_application():
+def main():
 
     initialize_session()
+
+    token = st.session_state.get(
+        "access_token"
+    )
 
     # --------------------------------------------------------
     # Authentication
     # --------------------------------------------------------
 
-    if not st.session_state.access_token:
+    if not token:
 
         login_tab, register_tab = st.tabs(
             [
@@ -808,7 +1991,7 @@ def main_application():
         return
 
     # --------------------------------------------------------
-    # Verify current user
+    # Verify User
     # --------------------------------------------------------
 
     user = st.session_state.get(
@@ -820,27 +2003,38 @@ def main_application():
         try:
 
             response = get_current_user(
-                st.session_state.access_token
+                token
             )
 
             if response.status_code == 200:
 
-                st.session_state.user = (
-                    response.json()
-                )
+                st.session_state[
+                    "user"
+                ] = response.json()
+
+                user = st.session_state[
+                    "user"
+                ]
+
+            elif response.status_code == 401:
+
+                handle_unauthorized()
+                return
 
             else:
 
-                st.session_state.access_token = None
+                st.error(
+                    get_error_message(
+                        response,
+                        "Unable to verify session.",
+                    )
+                )
 
-                st.rerun()
+                return
 
-        except Exception as error:
+        except requests.RequestException as error:
 
-            st.error(
-                f"Unable to verify your session: {error}"
-            )
-
+            show_connection_error(error)
             return
 
     # --------------------------------------------------------
@@ -851,10 +2045,6 @@ def main_application():
 
         st.title(
             "🎓 Placement AI"
-        )
-
-        user = st.session_state.get(
-            "user"
         )
 
         if user:
@@ -878,25 +2068,22 @@ def main_application():
                 "Dashboard",
                 "Profile",
                 "Resume",
-                "Job Analysis",
                 "Readiness Analysis",
-                "Career Roadmap",
-                "Interview Preparation",
-                "AI Assistant",
+                "Job Description",
             ],
         )
 
         st.divider()
 
         if st.button(
-            "Logout",
+            "🚪 Logout",
             use_container_width=True,
         ):
 
             logout()
 
     # --------------------------------------------------------
-    # Page routing
+    # Routing
     # --------------------------------------------------------
 
     if page == "Dashboard":
@@ -905,73 +2092,33 @@ def main_application():
 
     elif page == "Profile":
 
-        show_profile_page()
+        profile_page(
+            token
+        )
 
     elif page == "Resume":
 
-        st.title(
-            "📄 Resume Management"
-        )
-
-        st.info(
-            "Resume management module is available "
-            "through the backend APIs."
-        )
-
-    elif page == "Job Analysis":
-
-        st.title(
-            "💼 Job Description Analysis"
-        )
-
-        st.info(
-            "Job Description analysis will be added "
-            "in the upcoming module."
+        resumes_page(
+            token
         )
 
     elif page == "Readiness Analysis":
 
-        readiness_page()
-
-    elif page == "Career Roadmap":
-
-        st.title(
-            "🗺️ Career Roadmap"
+        readiness_page(
+            token
         )
 
-        st.info(
-            "The personalized career roadmap will be "
-            "implemented after skill-gap analysis."
-        )
+    elif page == "Job Description":
 
-    elif page == "Interview Preparation":
-
-        st.title(
-            "🎤 Interview Preparation"
-        )
-
-        st.info(
-            "AI interview question generation will be "
-            "implemented after resume and Job Description "
-            "analysis."
-        )
-
-    elif page == "AI Assistant":
-
-        st.title(
-            "🤖 AI Career Assistant"
-        )
-
-        st.info(
-            "The Ollama + RAG assistant will be implemented "
-            "in the AI module."
+        job_description_page(
+            token
         )
 
 
 # ============================================================
-# APPLICATION ENTRY POINT
+# ENTRY POINT
 # ============================================================
 
 if __name__ == "__main__":
 
-    main_application()
+    main()
