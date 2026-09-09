@@ -7,68 +7,125 @@ from api_client import (
 )
 
 
+st.set_page_config(
+    page_title="Student Profile",
+    page_icon="👤",
+    layout="wide",
+)
+
+
 def show_profile_page():
 
     st.title("👤 Student Profile")
+    st.write("Complete your profile to improve your placement readiness.")
+
+    # ============================================================
+    # CHECK LOGIN
+    # ============================================================
 
     token = st.session_state.get("access_token")
 
     if not token:
         st.warning("Please login first.")
-        return
+        st.stop()
+
+    # ============================================================
+    # LOAD PROFILE
+    # ============================================================
+
+    profile = {}
+    profile_exists = False
 
     try:
+
         response = get_profile(token)
 
         if response.status_code == 200:
+
             profile = response.json()
+
+            if not isinstance(profile, dict):
+                profile = {}
+
             profile_exists = True
 
         elif response.status_code == 404:
+
             profile = {}
             profile_exists = False
 
         elif response.status_code == 401:
-            st.error("Your session has expired. Please login again.")
-            return
+
+            st.error(
+                "Your session has expired. Please login again."
+            )
+
+            st.session_state.pop("access_token", None)
+            st.stop()
 
         else:
+
             st.error(
-                f"Unable to load profile: {response.text}"
+                f"Unable to load profile. "
+                f"Status code: {response.status_code}"
             )
-            return
+
+            st.code(response.text)
+
+            st.stop()
 
     except Exception as error:
+
         st.error(
-            f"Unable to connect to backend: {error}"
+            "Unable to connect to the backend."
         )
-        return
+
+        st.exception(error)
+
+        st.stop()
+
+    # ============================================================
+    # PROFILE STATUS
+    # ============================================================
 
     if profile_exists:
-        st.success("Your profile is currently saved.")
+
+        st.success(
+            "Your profile is currently saved."
+        )
+
     else:
+
         st.info(
             "Your profile has not been created yet. "
             "Complete the form below."
         )
 
+    st.divider()
+
+    # ============================================================
+    # PROFILE FORM
+    # ============================================================
+
     with st.form("student_profile_form"):
+
+        st.subheader("🎓 Academic Information")
 
         university = st.text_input(
             "University",
-            value=profile.get("university", ""),
+            value=profile.get("university") or "",
             placeholder="Example: University of Rajasthan",
         )
 
         degree = st.text_input(
             "Degree",
-            value=profile.get("degree", ""),
+            value=profile.get("degree") or "",
             placeholder="Example: B.Tech",
         )
 
         branch = st.text_input(
             "Branch / Specialization",
-            value=profile.get("branch", ""),
+            value=profile.get("branch") or "",
             placeholder="Example: Computer Science and Engineering",
         )
 
@@ -76,52 +133,67 @@ def show_profile_page():
             "Graduation Year",
             min_value=2000,
             max_value=2100,
-            value=(
+            value=int(
                 profile.get("graduation_year")
-                if profile.get("graduation_year")
-                else 2026
+                or 2026
             ),
             step=1,
         )
 
+        st.divider()
+
+        st.subheader("💼 Career Information")
+
         target_role = st.text_input(
             "Target Job Role",
-            value=profile.get("target_role", ""),
+            value=profile.get("target_role") or "",
             placeholder="Example: Machine Learning Engineer",
         )
 
+        st.divider()
+
+        st.subheader("🔗 Professional Links")
+
         github_url = st.text_input(
             "GitHub URL",
-            value=profile.get("github_url", ""),
+            value=profile.get("github_url") or "",
             placeholder="https://github.com/username",
         )
 
         linkedin_url = st.text_input(
             "LinkedIn URL",
-            value=profile.get("linkedin_url", ""),
+            value=profile.get("linkedin_url") or "",
             placeholder="https://www.linkedin.com/in/username",
         )
 
         portfolio_url = st.text_input(
             "Portfolio URL",
-            value=profile.get("portfolio_url", ""),
+            value=profile.get("portfolio_url") or "",
             placeholder="https://yourportfolio.com",
         )
 
+        st.divider()
+
+        st.subheader("📝 Professional Summary")
+
         bio = st.text_area(
             "Professional Bio",
-            value=profile.get("bio", ""),
+            value=profile.get("bio") or "",
             placeholder=(
                 "Briefly describe your technical interests, "
-                "experience, and career goals."
+                "experience, skills, projects, and career goals."
             ),
             height=150,
         )
 
         submitted = st.form_submit_button(
-            "Save Profile",
+            "💾 Save Profile",
             use_container_width=True,
         )
+
+    # ============================================================
+    # SAVE PROFILE
+    # ============================================================
 
     if submitted:
 
@@ -153,13 +225,37 @@ def show_profile_page():
                     profile_data,
                 )
 
+            # ====================================================
+            # SUCCESS
+            # ====================================================
+
             if response.status_code in (200, 201):
 
                 st.success(
-                    "Profile saved successfully."
+                    "✅ Profile saved successfully!"
                 )
 
                 st.rerun()
+
+            # ====================================================
+            # UNAUTHORIZED
+            # ====================================================
+
+            elif response.status_code == 401:
+
+                st.error(
+                    "Your session has expired. "
+                    "Please login again."
+                )
+
+                st.session_state.pop(
+                    "access_token",
+                    None,
+                )
+
+            # ====================================================
+            # PROFILE ALREADY EXISTS
+            # ====================================================
 
             elif response.status_code == 409:
 
@@ -167,11 +263,14 @@ def show_profile_page():
                     "A profile already exists for this account."
                 )
 
-            elif response.status_code == 401:
-
-                st.error(
-                    "Your session has expired. Please login again."
+                st.info(
+                    "Please refresh the page and try updating "
+                    "your existing profile."
                 )
+
+            # ====================================================
+            # VALIDATION ERROR
+            # ====================================================
 
             elif response.status_code == 422:
 
@@ -180,14 +279,46 @@ def show_profile_page():
                     "Please check the entered values."
                 )
 
+                st.code(response.text)
+
+            # ====================================================
+            # NOT FOUND
+            # ====================================================
+
+            elif response.status_code == 404:
+
+                st.error(
+                    "The profile API endpoint was not found."
+                )
+
+                st.code(response.text)
+
+            # ====================================================
+            # OTHER BACKEND ERROR
+            # ====================================================
+
             else:
 
                 st.error(
-                    f"Unable to save profile: {response.text}"
+                    f"Unable to save profile. "
+                    f"Status code: {response.status_code}"
                 )
+
+                st.code(response.text)
 
         except Exception as error:
 
             st.error(
-                f"Unable to connect to backend: {error}"
+                "Unable to connect to the backend."
             )
+
+            st.exception(error)
+
+
+# ================================================================
+# IMPORTANT:
+# STREAMLIT PAGES ARE EXECUTED DIRECTLY.
+# CALL THE FUNCTION HERE.
+# ================================================================
+
+show_profile_page()

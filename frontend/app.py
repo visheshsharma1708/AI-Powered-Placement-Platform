@@ -54,38 +54,70 @@ def get_error_message(
     response,
     default_message: str,
 ) -> str:
+
     try:
         data = response.json()
+
         detail = data.get("detail")
 
         if isinstance(detail, list):
+
             messages = []
 
             for item in detail:
-                if isinstance(item, dict):
-                    messages.append(
-                        str(item.get("msg", item))
-                    )
-                else:
-                    messages.append(str(item))
 
-            return "; ".join(messages)
+                if isinstance(item, dict):
+
+                    messages.append(
+                        str(
+                            item.get(
+                                "msg",
+                                item,
+                            )
+                        )
+                    )
+
+                else:
+
+                    messages.append(
+                        str(item)
+                    )
+
+            if messages:
+                return "; ".join(messages)
 
         if detail:
             return str(detail)
 
-    except (ValueError, AttributeError):
+    except (
+        ValueError,
+        AttributeError,
+        TypeError,
+    ):
         pass
 
-    return response.text or default_message
+    if response is not None:
+
+        text = getattr(
+            response,
+            "text",
+            "",
+        )
+
+        if text:
+            return text
+
+    return default_message
 
 
 def handle_unauthorized():
+
     st.session_state["access_token"] = None
     st.session_state["user"] = None
     st.session_state["profile"] = None
     st.session_state["latest_analysis"] = None
     st.session_state["latest_readiness"] = None
+    st.session_state["latest_resume_id"] = None
 
     st.warning(
         "Your session has expired. Please login again."
@@ -95,19 +127,30 @@ def handle_unauthorized():
 
 
 def show_connection_error(error):
-    if isinstance(error, requests.ConnectionError):
+
+    if isinstance(
+        error,
+        requests.ConnectionError,
+    ):
+
         st.error(
-            "Cannot connect to FastAPI. "
+            "Cannot connect to FastAPI backend. "
             "Please make sure Uvicorn is running on "
             "http://127.0.0.1:8000."
         )
 
-    elif isinstance(error, requests.Timeout):
+    elif isinstance(
+        error,
+        requests.Timeout,
+    ):
+
         st.error(
-            "The request timed out. Please try again."
+            "The request timed out. "
+            "Please try again."
         )
 
     else:
+
         st.error(
             f"Backend request failed: {error}"
         )
@@ -121,6 +164,7 @@ def login_user(
     email: str,
     password: str,
 ):
+
     return requests.post(
         f"{API_URL}/auth/login",
         json={
@@ -136,6 +180,7 @@ def register_user(
     email: str,
     password: str,
 ):
+
     return requests.post(
         f"{API_URL}/auth/register",
         json={
@@ -148,15 +193,16 @@ def register_user(
 
 
 def get_current_user(token: str):
+
     return requests.get(
-        f"{API_URL}/auth/me",
+        f"{API_URL}/users/me",
         headers=get_headers(token),
         timeout=30,
     )
 
 
 # ============================================================
-# LOGIN
+# LOGIN PAGE
 # ============================================================
 
 def login_page():
@@ -166,7 +212,9 @@ def login_page():
         "& Career Readiness Platform"
     )
 
-    st.subheader("Student Login")
+    st.subheader(
+        "Student Login"
+    )
 
     with st.form("login_form"):
 
@@ -190,11 +238,19 @@ def login_page():
         return
 
     if not email.strip():
-        st.warning("Please enter your email.")
+
+        st.warning(
+            "Please enter your email."
+        )
+
         return
 
     if not password:
-        st.warning("Please enter your password.")
+
+        st.warning(
+            "Please enter your password."
+        )
+
         return
 
     try:
@@ -225,7 +281,7 @@ def login_page():
 
             st.error(
                 "Login succeeded, but no access token "
-                "was returned."
+                "was returned by the backend."
             )
 
             return
@@ -249,7 +305,17 @@ def login_page():
 
         else:
 
+            st.session_state["access_token"] = None
             st.session_state["user"] = None
+
+            st.error(
+                get_error_message(
+                    user_response,
+                    "Unable to retrieve your account information.",
+                )
+            )
+
+            return
 
         st.success(
             "Login successful."
@@ -263,7 +329,7 @@ def login_page():
 
 
 # ============================================================
-# REGISTRATION
+# REGISTRATION PAGE
 # ============================================================
 
 def register_page():
@@ -307,27 +373,43 @@ def register_page():
         return
 
     if not full_name.strip():
+
         st.warning(
             "Full name is required."
         )
+
         return
 
     if not email.strip():
+
         st.warning(
             "Email is required."
         )
+
         return
 
     if not password:
+
         st.warning(
             "Password is required."
         )
+
+        return
+
+    if len(password) < 6:
+
+        st.warning(
+            "Password must contain at least 6 characters."
+        )
+
         return
 
     if password != confirm_password:
+
         st.error(
             "Passwords do not match."
         )
+
         return
 
     try:
@@ -363,14 +445,15 @@ def register_page():
 
 
 # ============================================================
-# DASHBOARD
+# DASHBOARD PAGE
 # ============================================================
 
 def dashboard_page():
 
-    user = st.session_state.get(
-        "user"
-    ) or {}
+    user = (
+        st.session_state.get("user")
+        or {}
+    )
 
     full_name = user.get(
         "full_name",
@@ -493,29 +576,103 @@ def dashboard_page():
 
 
 # ============================================================
-# PROFILE
+# PROFILE API
 # ============================================================
 
-def profile_page(token: str):
+def get_profile_api(
+    token: str,
+):
+
+    return requests.get(
+        f"{API_URL}/profiles/me",
+        headers=get_headers(token),
+        timeout=30,
+    )
+
+
+def create_profile_api(
+    token: str,
+    profile_data: dict,
+):
+
+    return requests.post(
+        f"{API_URL}/profiles/me",
+        headers=get_headers(token),
+        json=profile_data,
+        timeout=30,
+    )
+
+
+def update_profile_api(
+    token: str,
+    profile_data: dict,
+):
+
+    return requests.put(
+        f"{API_URL}/profiles/me",
+        headers=get_headers(token),
+        json=profile_data,
+        timeout=30,
+    )
+
+
+# ============================================================
+# PROFILE PAGE
+# ============================================================
+
+def profile_page(
+    token: str,
+):
 
     st.title(
         "👤 Student Profile"
     )
 
+    profile = {}
+    profile_exists = False
+
+    # --------------------------------------------------------
+    # Load Profile
+    # --------------------------------------------------------
+
     try:
 
-        response = requests.get(
-            f"{API_URL}/profiles/me",
-            headers=get_headers(token),
-            timeout=30,
+        response = get_profile_api(
+            token
         )
 
-        if response.status_code == 401:
+        if response.status_code == 200:
+
+            profile = response.json()
+
+            if not isinstance(
+                profile,
+                dict,
+            ):
+
+                st.error(
+                    "Invalid profile data received from backend."
+                )
+
+                return
+
+            profile_exists = True
+
+            st.session_state["profile"] = profile
+
+        elif response.status_code == 404:
+
+            profile = {}
+            profile_exists = False
+
+            st.session_state["profile"] = None
+
+        elif response.status_code == 401:
 
             handle_unauthorized()
             return
 
-        if response.status_code != 200:
+        else:
 
             st.error(
                 get_error_message(
@@ -526,242 +683,304 @@ def profile_page(token: str):
 
             return
 
-        profile = response.json()
+    except requests.RequestException as error:
 
-        st.session_state["profile"] = profile
+        show_connection_error(error)
+        return
 
-        st.subheader(
-            "Profile Information"
+    # --------------------------------------------------------
+    # Profile Status
+    # --------------------------------------------------------
+
+    if profile_exists:
+
+        st.success(
+            "Your profile is currently saved."
         )
 
-        col1, col2 = st.columns(2)
+    else:
 
-        with col1:
-
-            st.write(
-                f"**University:** "
-                f"{profile.get('university') or 'Not provided'}"
-            )
-
-            st.write(
-                f"**Degree:** "
-                f"{profile.get('degree') or 'Not provided'}"
-            )
-
-            st.write(
-                f"**Branch:** "
-                f"{profile.get('branch') or 'Not provided'}"
-            )
-
-            st.write(
-                f"**Graduation Year:** "
-                f"{profile.get('graduation_year') or 'Not provided'}"
-            )
-
-        with col2:
-
-            st.write(
-                f"**Target Role:** "
-                f"{profile.get('target_role') or 'Not provided'}"
-            )
-
-            st.write(
-                f"**GitHub:** "
-                f"{profile.get('github_url') or 'Not provided'}"
-            )
-
-            st.write(
-                f"**LinkedIn:** "
-                f"{profile.get('linkedin_url') or 'Not provided'}"
-            )
-
-            st.write(
-                f"**Portfolio:** "
-                f"{profile.get('portfolio_url') or 'Not provided'}"
-            )
-
-        if profile.get("bio"):
-
-            st.divider()
-
-            st.subheader(
-                "About"
-            )
-
-            st.write(
-                profile["bio"]
-            )
-
-        st.divider()
-
-        st.subheader(
-            "Update Profile"
+        st.info(
+            "Your profile has not been created yet. "
+            "Complete the form below."
         )
 
-        with st.form(
-            "profile_update_form"
+    # --------------------------------------------------------
+    # Profile Form
+    # --------------------------------------------------------
+
+    form_title = (
+        "Update Profile"
+        if profile_exists
+        else "Create Student Profile"
+    )
+
+    st.subheader(
+        form_title
+    )
+
+    with st.form(
+        "student_profile_form"
+    ):
+
+        university = st.text_input(
+            "University",
+            value=(
+                profile.get(
+                    "university"
+                )
+                or ""
+            ),
+            placeholder=(
+                "Example: University of Rajasthan"
+            ),
+        )
+
+        degree = st.text_input(
+            "Degree",
+            value=(
+                profile.get(
+                    "degree"
+                )
+                or ""
+            ),
+            placeholder="Example: B.Tech",
+        )
+
+        branch = st.text_input(
+            "Branch / Specialization",
+            value=(
+                profile.get(
+                    "branch"
+                )
+                or ""
+            ),
+            placeholder=(
+                "Example: Computer Science and Engineering"
+            ),
+        )
+
+        current_year = profile.get(
+            "graduation_year"
+        )
+
+        try:
+
+            current_year = int(
+                current_year
+            )
+
+        except (
+            TypeError,
+            ValueError,
         ):
 
-            university = st.text_input(
-                "University",
-                value=profile.get(
-                    "university"
-                ) or "",
-            )
+            current_year = 2026
 
-            degree = st.text_input(
-                "Degree",
-                value=profile.get(
-                    "degree"
-                ) or "",
-            )
+        graduation_year = st.number_input(
+            "Graduation Year",
+            min_value=2000,
+            max_value=2100,
+            value=current_year,
+            step=1,
+        )
 
-            branch = st.text_input(
-                "Branch",
-                value=profile.get(
-                    "branch"
-                ) or "",
-            )
-
-            current_year = profile.get(
-                "graduation_year"
-            )
-
-            try:
-                current_year = int(
-                    current_year
-                )
-            except (
-                TypeError,
-                ValueError,
-            ):
-                current_year = 2026
-
-            graduation_year = st.number_input(
-                "Graduation Year",
-                min_value=2000,
-                max_value=2100,
-                value=current_year,
-                step=1,
-            )
-
-            target_role = st.text_input(
-                "Target Role",
-                value=profile.get(
+        target_role = st.text_input(
+            "Target Job Role",
+            value=(
+                profile.get(
                     "target_role"
-                ) or "",
-            )
+                )
+                or ""
+            ),
+            placeholder=(
+                "Example: Machine Learning Engineer"
+            ),
+        )
 
-            github_url = st.text_input(
-                "GitHub URL",
-                value=profile.get(
+        github_url = st.text_input(
+            "GitHub URL",
+            value=(
+                profile.get(
                     "github_url"
-                ) or "",
-            )
+                )
+                or ""
+            ),
+            placeholder=(
+                "https://github.com/username"
+            ),
+        )
 
-            linkedin_url = st.text_input(
-                "LinkedIn URL",
-                value=profile.get(
+        linkedin_url = st.text_input(
+            "LinkedIn URL",
+            value=(
+                profile.get(
                     "linkedin_url"
-                ) or "",
-            )
+                )
+                or ""
+            ),
+            placeholder=(
+                "https://www.linkedin.com/in/username"
+            ),
+        )
 
-            portfolio_url = st.text_input(
-                "Portfolio URL",
-                value=profile.get(
+        portfolio_url = st.text_input(
+            "Portfolio URL",
+            value=(
+                profile.get(
                     "portfolio_url"
-                ) or "",
-            )
+                )
+                or ""
+            ),
+            placeholder=(
+                "https://yourportfolio.com"
+            ),
+        )
 
-            bio = st.text_area(
-                "Bio",
-                value=profile.get(
+        bio = st.text_area(
+            "Professional Bio",
+            value=(
+                profile.get(
                     "bio"
-                ) or "",
+                )
+                or ""
+            ),
+            placeholder=(
+                "Briefly describe your technical interests, "
+                "experience, and career goals."
+            ),
+            height=150,
+        )
+
+        submitted = st.form_submit_button(
+            (
+                "Update Profile"
+                if profile_exists
+                else "Create Profile"
+            ),
+            use_container_width=True,
+        )
+
+    # --------------------------------------------------------
+    # Save Profile
+    # --------------------------------------------------------
+
+    if not submitted:
+        return
+
+    profile_data = {
+        "university": (
+            university.strip()
+            or None
+        ),
+        "degree": (
+            degree.strip()
+            or None
+        ),
+        "branch": (
+            branch.strip()
+            or None
+        ),
+        "graduation_year": int(
+            graduation_year
+        ),
+        "target_role": (
+            target_role.strip()
+            or None
+        ),
+        "github_url": (
+            github_url.strip()
+            or None
+        ),
+        "linkedin_url": (
+            linkedin_url.strip()
+            or None
+        ),
+        "portfolio_url": (
+            portfolio_url.strip()
+            or None
+        ),
+        "bio": (
+            bio.strip()
+            or None
+        ),
+    }
+
+    try:
+
+        if profile_exists:
+
+            save_response = update_profile_api(
+                token,
+                profile_data,
             )
 
-            submitted = st.form_submit_button(
-                "Save Profile",
-                use_container_width=True,
+        else:
+
+            save_response = create_profile_api(
+                token,
+                profile_data,
             )
 
-        if submitted:
+        if save_response.status_code in (
+            200,
+            201,
+        ):
 
-            payload = {
-                "university": (
-                    university.strip()
-                    or None
-                ),
-                "degree": (
-                    degree.strip()
-                    or None
-                ),
-                "branch": (
-                    branch.strip()
-                    or None
-                ),
-                "graduation_year": int(
-                    graduation_year
-                ),
-                "target_role": (
-                    target_role.strip()
-                    or None
-                ),
-                "github_url": (
-                    github_url.strip()
-                    or None
-                ),
-                "linkedin_url": (
-                    linkedin_url.strip()
-                    or None
-                ),
-                "portfolio_url": (
-                    portfolio_url.strip()
-                    or None
-                ),
-                "bio": (
-                    bio.strip()
-                    or None
-                ),
-            }
+            st.session_state["profile"] = (
+                save_response.json()
+                if save_response.content
+                else profile_data
+            )
 
-            try:
+            if profile_exists:
 
-                update_response = requests.put(
-                    f"{API_URL}/profiles/me",
-                    json=payload,
-                    headers=get_headers(token),
-                    timeout=30,
+                st.success(
+                    "Profile updated successfully."
                 )
 
-                if update_response.status_code == 401:
+            else:
 
-                    handle_unauthorized()
-                    return
+                st.success(
+                    "Profile created successfully."
+                )
 
-                if update_response.status_code in (
-                    200,
-                    201,
-                ):
+            st.rerun()
 
-                    st.success(
-                        "Profile updated successfully."
-                    )
+        elif save_response.status_code == 401:
 
-                    st.rerun()
+            handle_unauthorized()
+            return
 
-                else:
+        elif save_response.status_code == 409:
 
-                    st.error(
-                        get_error_message(
-                            update_response,
-                            "Unable to update profile.",
-                        )
-                    )
+            st.warning(
+                "A profile already exists for this account. "
+                "Please refresh the page and update the existing profile."
+            )
 
-            except requests.RequestException as error:
+        elif save_response.status_code == 422:
 
-                show_connection_error(error)
+            st.error(
+                "Some profile information is invalid. "
+                "Please check the entered values."
+            )
+
+            st.caption(
+                get_error_message(
+                    save_response,
+                    "Validation failed.",
+                )
+            )
+
+        else:
+
+            st.error(
+                get_error_message(
+                    save_response,
+                    "Unable to save profile.",
+                )
+            )
 
     except requests.RequestException as error:
 
@@ -772,7 +991,9 @@ def profile_page(token: str):
 # RESUME API
 # ============================================================
 
-def get_resumes(token: str):
+def get_resumes(
+    token: str,
+):
 
     return requests.get(
         f"{API_URL}/resumes/",
@@ -853,14 +1074,22 @@ def display_analysis_section(
 
     st.subheader(title)
 
-    if isinstance(data, list):
+    if isinstance(
+        data,
+        list,
+    ):
 
         for item in data:
 
-            if isinstance(item, dict):
+            if isinstance(
+                item,
+                dict,
+            ):
+
                 st.json(item)
 
             else:
+
                 st.write(
                     f"• {item}"
                 )
@@ -941,7 +1170,10 @@ def display_resume_analysis(
 
             count = (
                 len(value)
-                if isinstance(value, list)
+                if isinstance(
+                    value,
+                    list,
+                )
                 else 0
             )
 
@@ -998,7 +1230,9 @@ def display_resume_analysis(
 # RESUME PAGE
 # ============================================================
 
-def resumes_page(token: str):
+def resumes_page(
+    token: str,
+):
 
     st.title(
         "📄 Resume Management"
@@ -1297,10 +1531,12 @@ def run_resume_download(
 
 
 # ============================================================
-# READINESS PAGE
+# READINESS API
 # ============================================================
 
-def readiness_page(token: str):
+def readiness_page(
+    token: str,
+):
 
     st.title(
         "🎯 Placement Readiness Analysis"
@@ -1588,10 +1824,13 @@ def display_readiness_result(
         {},
     )
 
-    if isinstance(
-        features,
-        dict,
-    ) and features:
+    if (
+        isinstance(
+            features,
+            dict,
+        )
+        and features
+    ):
 
         st.divider()
 
@@ -1764,7 +2003,7 @@ def display_factor(
 
 
 # ============================================================
-# JOB DESCRIPTION
+# JOB DESCRIPTION PAGE
 # ============================================================
 
 def job_description_page(
@@ -2120,5 +2359,4 @@ def main():
 # ============================================================
 
 if __name__ == "__main__":
-
     main()
